@@ -1,0 +1,956 @@
+import os
+import numpy as np, pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.image as implt
+from PIL import Image
+import keras,cv2,shutil,keras_preprocessing,requests,math,glob, datetime
+import tensorflow as tf
+from keras import layers
+from keras.models import Sequential, Model
+from keras.layers import Lambda, Input, Dense, Dropout, Flatten, Conv2D, MaxPooling2D, Activation, SpatialDropout2D, GlobalAveragePooling2D
+#from keras.layers.normalization import BatchNormalization
+from keras.callbacks import EarlyStopping
+from keras_preprocessing import image
+from keras_preprocessing.image import ImageDataGenerator
+from keras.applications.inception_v3 import InceptionV3, preprocess_input as inception_preprocessor
+from keras.applications.xception import Xception, preprocess_input as xception_preprocessor
+from keras.applications.inception_resnet_v2 import InceptionResNetV2, preprocess_input as inc_resnet_preprocessor
+from keras.applications.nasnet import NASNetLarge, preprocess_input as nasnet_preprocessor
+from sklearn.utils import shuffle
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.datasets import load_files
+from io import BytesIO
+import seaborn as sns
+import xml.etree.ElementTree as ET
+from pathlib import Path
+%load_ext tensorboard
+shutil.rmtree('./logs', ignore_errors=True)
+pip install keras_preprocessing
+%matplotlib inline
+%config InlineBackend.figure_format = 'svg'
+dog_images = glob.glob('D:/Debarati/octobor/05.10.2023/images/Images')
+breeds = glob.glob('D:/Debarati/octobor/05.10.2023/annotation/Annotation')
+annotations = glob.glob('D:/Debarati/octobor/05.10.2023/annotation/Annotation')
+cropped = "./Cropped/"
+img_size = 299 # For Xception input
+train_dir = './Cropped' # './Images'
+batch_size_training = 256
+batch_size_validation = 256
+input_shape = (img_size,img_size,3)
+def plot_metric(history, metric):
+    train_metrics = history.history[metric]
+    val_metrics = history.history['val_'+metric]
+    epochs = range(1, len(train_metrics) + 1)
+    plt.plot(epochs, train_metrics)
+    plt.plot(epochs, val_metrics)
+    plt.title('Training and validation '+ metric)
+    plt.xlabel("Epochs")
+    plt.ylabel(metric)
+    plt.legend(["train_"+metric, 'val_'+metric])
+    plt.show()
+def get_bounding_boxes(annot):
+    xml = annot
+    tree = ET.parse(xml)
+    root = tree.getroot()
+    objects = root.findall('object')
+    bbox = []
+    for o in objects:
+        bndbox = o.find('bndbox')
+        xmin = int(bndbox.find('xmin').text)
+        ymin = int(bndbox.find('ymin').text)
+        xmax = int(bndbox.find('xmax').text)
+        ymax = int(bndbox.find('ymax').text)
+        bbox.append((xmin,ymin,xmax,ymax))
+    return bbox
+def get_image(annot):
+    img_path = 'D:/Debarati/octobor/05.10.2023/annotation/Annotation'
+    file = annot.split('/')
+    img_filename = img_path + file[-2]+'/'+file[-1]+'.jpg'
+    return img_filename
+def get_image(annot):
+    img_path = 'D:/Debarati/octobor/05.10.2023/annotation/Annotation'
+    file = annot.split('/')
+    img_filename = img_path + file[-2]+'/'+file[-1]+'.jpg'
+    return img_filename
+def get_image(annot):
+    img_path = 'D:/Debarati/octobor/05.10.2023/annotation/Annotation'
+    file = annot.split('/')
+    img_filename = img_path + file[-2]+'/'+file[-1]+'.jpg'
+    return img_filename
+def extract_all_features(data):
+    inception_features = get_features(InceptionV3, inception_preprocessor, input_shape, data)
+    xception_features = get_features(Xception, xception_preprocessor, input_shape, data)
+    nasnet_features = get_features(NASNetLarge, nasnet_preprocessor, input_shape, data)
+    inc_resnet_features = get_features(InceptionResNetV2, inc_resnet_preprocessor, input_shape, data)
+    extracted_features = np.concatenate([inception_features, xception_features, nasnet_features, inc_resnet_features],axis=-1)
+    return extracted_features
+
+print(len(dog_images), len(breeds), len(annotations))
+plt.figure(figsize=(10,6))
+for i in range(len(dog_images)):
+    bbox = get_bounding_boxes(annotations[i])
+    dog = get_image(annotations[i])
+    im = Image.open(dog)
+    for j in range(len(bbox)):
+        im2 = im.crop(bbox[j])
+        im2 = im2.resize((100,100), Image.ANTIALIAS)
+        new_path = dog.replace('D:/Debarati/octobor/05.10.2023/annotation/Annotation')
+        new_path = new_path.replace('.jpg','-' + str(j) + '.jpg')
+        im2=im2.convert('RGB')
+        head, tail = os.path.split(new_path)
+        Path(head).mkdir(parents=True, exist_ok=True)
+        im2.save(new_path)
+plt.figure(figsize=(10,6))
+for i in range(len(dog_images)):
+    bbox = get_bounding_boxes(annotations[i])
+    dog = get_image(annotations[i])
+    im = Image.open(dog)
+    for j in range(len(bbox)):
+        im2 = im.crop(bbox[j])
+        im2 = im2.resize((100,100), Image.ANTIALIAS)
+        new_path = dog.replace('D:/Debarati/octobor/05.10.2023/annotation/Annotation')
+        new_path = new_path.replace('.jpg','-' + str(j) + '.jpg')
+        im2=im2.convert('RGB')
+        head, tail = os.path.split(new_path)
+        Path(head).mkdir(parents=True, exist_ok=True)
+        im2.save(new_path)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085620-Chihuahua/n02085620_3593.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085620-Chihuahua/n02085620_3593.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085620-Chihuahua/n02085620_3593.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# i. Convert color images to grayscale images
+def convert_to_grayscale(dog_images):
+    image = cv2.imread(dog_images, cv2.IMREAD_COLOR)
+    if image is None:
+        print(f"Error: Unable to load image from {dog_images}")
+        return None
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return grayscale_image
+
+# ii. Plot grayscale images with their corresponding pixel intensity histograms
+def plot_histogram(grayscale_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.hist(grayscale_image.ravel(), 256, [0,256])
+    plt.title("Pixel Intensity Histogram")
+    plt.show()
+
+# iii. Perform histogram equalization
+def equalize_histogram(grayscale_image):
+    equalized_image = cv2.equalizeHist(grayscale_image)
+    return equalized_image
+
+# iv. Plot equalized images with their corresponding histograms
+def plot_equalized_histogram(equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+
+    plt.subplot(122)
+    plt.hist(equalized_image.ravel(), 256, [0,256])
+    plt.title("Equalized Pixel Intensity Histogram")
+    plt.show()
+
+# v. Compare grayscale and equalized images
+def compare_images(grayscale_image, equalized_image):
+    plt.figure(figsize=(10, 5))
+    plt.subplot(121)
+    plt.imshow(grayscale_image, cmap='gray')
+    plt.title("Grayscale Image")
+
+    plt.subplot(122)
+    plt.imshow(equalized_image, cmap='gray')
+    plt.title("Equalized Image")
+    plt.show()
+
+# Load the color image and perform the operations
+color_image_path = "D:/Debarati/octobor/05.10.2023/images/Images/n02085936-Maltese_dog/n02085936_3677.jpg" # Replace with your image path
+grayscale_image = convert_to_grayscale(color_image_path)
+plot_histogram(grayscale_image)
+
+equalized_image = equalize_histogram(grayscale_image)
+plot_equalized_histogram(equalized_image)
+
+# v. Compare grayscale and equalized images
+compare_images(grayscale_image, equalized_image)
+# Perform PCA with 2 components
+pca = PCA(n_components=2)
+pca_result = pca.fit_transform(histograms_normalized)
+# Perform PCA with 2 components
+pca = PCA(n_components=2)
+pca_result = pca.fit_transform(histograms_normalized)
